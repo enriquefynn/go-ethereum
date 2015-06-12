@@ -18,9 +18,12 @@
 package miner
 
 import (
+	"fmt"
 	"math/big"
 	"sync/atomic"
+	"time"
 
+	"github.com/ethereum/ethash"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -158,4 +161,39 @@ func (self *Miner) PendingBlock() *types.Block {
 func (self *Miner) SetEtherbase(addr common.Address) {
 	self.coinbase = addr
 	self.worker.setEtherbase(addr)
+}
+
+func GPUBench(gpuid uint64) {
+	e := ethash.NewCL(1, []int{int(gpuid)})
+
+	var h common.Hash
+	bogoHeader := &types.Header{
+		ParentHash: h,
+		Number:     big.NewInt(int64(42)),
+		Difficulty: big.NewInt(int64(999999999999999)),
+	}
+	bogoBlock := types.NewBlock(bogoHeader, nil, nil, nil)
+
+	err := ethash.InitCL(bogoBlock.NumberU64(), e)
+	if err != nil {
+		fmt.Println("OpenCL init error: ", err)
+		return
+	}
+
+	stopChan := make(chan struct{})
+	reportHashRate := func() {
+		for {
+			time.Sleep(3 * time.Second)
+			fmt.Printf("hashes/s : %v\n", e.GetHashrate())
+		}
+	}
+	fmt.Printf("Starting benchmark (%v seconds)\n", 60)
+	go reportHashRate()
+	go e.Search(bogoBlock, stopChan, 0)
+	time.Sleep(60 * time.Second)
+	fmt.Println("OK.")
+}
+
+func PrintOpenCLDevices() {
+	ethash.PrintDevices()
 }
