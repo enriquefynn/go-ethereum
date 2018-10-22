@@ -18,6 +18,7 @@ package state
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -104,6 +105,7 @@ type Account struct {
 	Balance  *big.Int
 	Root     common.Hash // merkle root of the storage trie
 	CodeHash []byte
+	Shardloc *big.Int // which shard the contract is replicated/moved to
 }
 
 // newObject creates a state object.
@@ -116,6 +118,9 @@ func newObject(db *StateDB, address common.Address, data Account) *stateObject {
 	}
 	if data.Root == (common.Hash{}) {
 		data.Root = emptyRoot
+	}
+	if data.Shardloc == nil {
+		data.Shardloc = new(big.Int)
 	}
 	return &stateObject{
 		db:             db,
@@ -384,6 +389,92 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	stateObject.dirtyCode = s.dirtyCode
 	stateObject.deleted = s.deleted
 	return stateObject
+}
+
+// Returns if account is moved to shards if so returns the shards ids
+func (self *stateObject) GetMovedShard(myShard int) (bool, int) {
+	if self.data.Shardloc.Bit(0) == 0 {
+		var movedLocation int
+		for idx, word := range self.data.Shardloc.Bits() {
+			movedLocation = idx * 64
+			for i := 0; i <= 64; i++ {
+				if word>>uint(i)&1 == 1 {
+					movedLocation += i
+					if movedLocation == myShard {
+						return false, myShard
+					}
+					return true, movedLocation
+				}
+			}
+		}
+		// Shardloc is 0
+		return false, 0
+	}
+	return true, 0
+}
+
+// Set a contract as moved to shard shardID
+func (self *stateObject) SetMoved(shardID int) error {
+	self.db.journal.append(shardChange{
+		account: &self.address,
+		prev:    self.data.Shardloc,
+	})
+	if self.data.Shardloc.Bit(0) == 1 {
+		return errors.New("Cannot move copied account")
+	}
+	if shardID > 255 {
+		return errors.New("Shard should range between 1 and 255")
+	}
+	self.data.Shardloc.SetBit(self.data.Shardloc, shardID, 1)
+	return nil
+}
+
+func (self *stateObject) setShard(shardID *big.Int) {
+	self.data.Shardloc = shardID
+}
+
+func (self *stateObject) GetReplicatedShards() (bool, []int) {
+	if self.data.Shardloc.Bit(0) == 1 {
+		var replicatedShards []int
+		var shard int
+		for idx, word := range self.data.Shardloc.Bits() {
+			shard = idx * 64
+			for i := 0; i <= 64; i++ {
+				// 1st bit
+				if idx == 0 && i == 0 {
+					continue
+				}
+				if word>>uint(i)&1 == 1 {
+					replicatedShards = append(replicatedShards, shard+i)
+				}
+			}
+		}
+		return true, replicatedShards
+	}
+	return false, nil
+}
+
+// Set replicated in shards @shardIds
+func (self *stateObject) SetReplicated(shardIds []int) {
+	self.db.journal.append(shardChange{
+		account: &self.address,
+		prev:    self.data.Shardloc,
+	})
+	self.data.Shardloc.SetBit(self.data.Shardloc, 0, 1)
+	for _, shard := range shardIds {
+		self.data.Shardloc.SetBit(self.data.Shardloc, shard, 1)
+	}
+}
+
+// remove replicated in shards @shardIds
+func (self *stateObject) RemoveReplicated(shardIds []int) {
+	for _, shard := range shardIds {
+		self.data.Shardloc.SetBit(self.data.Shardloc, shard, 0)
+	}
+}
+
+func (self *stateObject) FinalizeRemoveReplicated(shardId int) {
+	self.data.Shardloc.SetBit(self.data.Shardloc, 0, 0)
 }
 
 //

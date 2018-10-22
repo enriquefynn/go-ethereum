@@ -115,6 +115,10 @@ type (
 		account            *common.Address
 		prevcode, prevhash []byte
 	}
+	shardChange struct {
+		account *common.Address
+		prev    *big.Int
+	}
 
 	// Changes to other state values.
 	refundChange struct {
@@ -192,6 +196,14 @@ func (ch codeChange) revert(s *StateDB) {
 }
 
 func (ch codeChange) dirtied() *common.Address {
+	return ch.account
+}
+
+func (ch shardChange) revert(s *StateDB) {
+	s.getStateObject(*ch.account).setShard(ch.prev)
+}
+
+func (ch shardChange) dirtied() *common.Address {
 	return ch.account
 }
 

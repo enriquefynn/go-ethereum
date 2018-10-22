@@ -856,6 +856,15 @@ func opStaticCall(pc *uint64, interpreter *EVMInterpreter, contract *Contract, m
 	return ret, nil
 }
 
+func opMove(pc *uint64, interpreter *EVMInterpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
+	shard := stack.pop()
+	shardLoc := int(shard.Int64())
+	interpreter.evm.StateDB.SetShard(contract.Address(), shardLoc)
+
+	interpreter.intPool.put(shard)
+	return nil, nil
+}
+
 func opReturn(pc *uint64, interpreter *EVMInterpreter, contract *Contract, memory *Memory, stack *Stack) ([]byte, error) {
 	offset, size := stack.pop(), stack.pop()
 	ret := memory.GetPtr(offset.Int64(), size.Int64())

@@ -17,9 +17,11 @@
 package core
 
 import (
+	"encoding/binary"
 	"errors"
 	"math"
 	"math/big"
+	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -194,6 +196,13 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 	istanbul := st.evm.ChainConfig().IsIstanbul(st.evm.BlockNumber)
 	contractCreation := msg.To() == nil
 
+	moveOp := []byte{0, 0, 0, 0}
+	// TODO: Pay move2 gas
+	var isMove2 bool
+	if len(st.data) >= 4 {
+		isMove2 = reflect.DeepEqual(st.data[0:4], moveOp)
+	}
+
 	// Pay intrinsic gas
 	gas, err := IntrinsicGas(st.data, contractCreation, homestead, istanbul)
 	if err != nil {
@@ -212,6 +221,22 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 	)
 	if contractCreation {
 		ret, _, st.gas, vmerr = evm.Create(sender, st.data, st.gas, st.value)
+	} else if isMove2 {
+		contractNonce := binary.LittleEndian.Uint64(st.data[4:12])
+
+		// TODO: Check sizes and return error if not correct
+		data := make([][]byte, 4)
+		//4 for move operation + 8 for contract nonce
+		var bStart uint32 = 12
+		for i := 0; i < 4; i++ {
+			if bStart+4 >= uint32(len(st.data)) {
+				return nil, 0, false, vm.ErrOutOfGas
+			}
+			dLen := binary.LittleEndian.Uint32(st.data[bStart : bStart+4])
+			data[i] = st.data[bStart+4 : bStart+4+dLen]
+			bStart = bStart + dLen + 4
+		}
+		evm.Move2(sender, st.to(), data[0], data[1], data[2], data[3], st.gas, st.value, contractNonce)
 	} else {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)

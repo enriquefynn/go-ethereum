@@ -239,3 +239,68 @@ func compareStateObjects(so0, so1 *stateObject, t *testing.T) {
 		}
 	}
 }
+
+func TestMoveShard(t *testing.T) {
+	state, _ := New(common.Hash{}, NewDatabase(ethdb.NewMemDatabase()))
+
+	stateobjaddr := toAddr([]byte("0"))
+	var storageaddr common.Hash
+
+	data := common.BytesToHash([]byte{17})
+
+	state.SetState(stateobjaddr, storageaddr, data)
+
+	// db, trie are already non-empty values
+	s := state.getStateObject(stateobjaddr)
+	err := s.SetMoved(256)
+	if err == nil {
+		t.Fatal()
+	}
+	err = s.SetMoved(255)
+	if err != nil {
+		t.Fatal(err)
+	}
+	isMoved, shard := s.GetMovedShard(1)
+	if isMoved == false || shard != 255 {
+		t.Errorf("Expected shard to be 255, is %v", shard)
+	}
+
+	isMoved, shard = s.GetMovedShard(255)
+	if isMoved == true {
+		t.Fatal("If shard is 255 is not moved")
+	}
+}
+
+func TestCopyShards(t *testing.T) {
+	state, _ := New(common.Hash{}, NewDatabase(ethdb.NewMemDatabase()))
+
+	stateobjaddr := toAddr([]byte("0"))
+	var storageaddr common.Hash
+
+	data := common.BytesToHash([]byte{17})
+
+	state.SetState(stateobjaddr, storageaddr, data)
+
+	// db, trie are already non-empty values
+	s := state.getStateObject(stateobjaddr)
+
+	replicateTo := []int{1, 2, 3, 4, 5, 6, 32, 64, 111, 255}
+	s.SetReplicated(replicateTo)
+
+	err := s.SetMoved(256)
+	if err == nil {
+		t.Fatal("Should not move copied contract")
+	}
+
+	isCopied, shards := s.GetReplicatedShards()
+
+	if isCopied == true {
+		for idx, shard := range shards {
+			if shard != replicateTo[idx] {
+				t.Fatalf("Expected shard %v to be %v", replicateTo[idx], shard)
+			}
+		}
+	} else {
+		t.Fatal()
+	}
+}

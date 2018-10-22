@@ -94,6 +94,12 @@ func (b *SimulatedBackend) Close() error {
 	return nil
 }
 
+func NewSimulatedBackendWithShard(alloc core.GenesisAlloc, gasLimit uint64, shardID int) *SimulatedBackend {
+	backend := NewSimulatedBackendWithDatabase(rawdb.NewMemoryDatabase(), alloc, gasLimit)
+	backend.config.ShardID = shardID
+	return backend
+}
+
 // Commit imports all the pending transactions as a single block and starts a
 // fresh new state.
 func (b *SimulatedBackend) Commit() {
@@ -119,7 +125,7 @@ func (b *SimulatedBackend) rollback() {
 	statedb, _ := b.blockchain.State()
 
 	b.pendingBlock = blocks[0]
-	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database())
+	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), b.config.ShardID)
 }
 
 // CodeAt returns the code associated with a certain account in the blockchain.
@@ -156,6 +162,17 @@ func (b *SimulatedBackend) NonceAt(ctx context.Context, contract common.Address,
 	}
 	statedb, _ := b.blockchain.State()
 	return statedb.GetNonce(contract), nil
+}
+
+// GetState returns stateDB.
+func (b *SimulatedBackend) GetState(ctx context.Context, blockNumber *big.Int) (*state.StateDB, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if blockNumber != nil && blockNumber.Cmp(b.blockchain.CurrentBlock().Number()) != 0 {
+		return nil, errBlockNumberUnsupported
+	}
+	return b.blockchain.State()
 }
 
 // StorageAt returns the value of key in the storage of an account in the blockchain.
@@ -347,7 +364,7 @@ func (b *SimulatedBackend) SendTransaction(ctx context.Context, tx *types.Transa
 	statedb, _ := b.blockchain.State()
 
 	b.pendingBlock = blocks[0]
-	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database())
+	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), b.config.ShardID)
 	return nil
 }
 
@@ -432,7 +449,7 @@ func (b *SimulatedBackend) AdjustTime(adjustment time.Duration) error {
 	statedb, _ := b.blockchain.State()
 
 	b.pendingBlock = blocks[0]
-	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database())
+	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), b.config.ShardID)
 
 	return nil
 }
@@ -440,6 +457,19 @@ func (b *SimulatedBackend) AdjustTime(adjustment time.Duration) error {
 // Blockchain returns the underlying blockchain.
 func (b *SimulatedBackend) Blockchain() *core.BlockChain {
 	return b.blockchain
+}
+
+// GetMovedContractAt returns if the contract was moved .
+func (b *SimulatedBackend) GetMovedContractAt(ctx context.Context, contract common.Address, blockNumber *big.Int) (bool, int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if blockNumber != nil && blockNumber.Cmp(b.blockchain.CurrentBlock().Number()) != 0 {
+		return false, 0, errBlockNumberUnsupported
+	}
+	statedb, _ := b.blockchain.State()
+	moved, movedTo := statedb.GetMovedShard(contract)
+	return moved, movedTo, nil
 }
 
 // callmsg implements core.Message to allow passing it as a transaction simulator.

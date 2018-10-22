@@ -20,6 +20,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -46,6 +47,10 @@ type StateDB interface {
 	GetCommittedState(common.Address, common.Hash) common.Hash
 	GetState(common.Address, common.Hash) common.Hash
 	SetState(common.Address, common.Hash, common.Hash)
+
+	SetShard(common.Address, int) error
+	GetMovedShard(common.Address) (bool, int)
+	StorageTrie(addr common.Address) state.Trie
 
 	Suicide(common.Address) bool
 	HasSuicided(common.Address) bool

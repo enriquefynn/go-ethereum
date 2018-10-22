@@ -89,7 +89,7 @@ func (b *LesApiBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.B
 	if header == nil {
 		return nil, nil, errors.New("header not found")
 	}
-	return light.NewState(ctx, header, b.eth.odr), header, nil
+	return light.NewState(ctx, header, b.eth.odr, b.eth.chainConfig.ShardID), header, nil
 }
 
 func (b *LesApiBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {

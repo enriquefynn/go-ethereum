@@ -63,6 +63,8 @@ func (n *proofList) Delete(key []byte) error {
 // * Contracts
 // * Accounts
 type StateDB struct {
+	shardID int
+
 	db   Database
 	trie Trie
 
@@ -106,7 +108,7 @@ type StateDB struct {
 }
 
 // Create a new state from a given trie.
-func New(root common.Hash, db Database) (*StateDB, error) {
+func New(root common.Hash, db Database, shardID int) (*StateDB, error) {
 	tr, err := db.OpenTrie(root)
 	if err != nil {
 		return nil, err
@@ -120,6 +122,7 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 		logs:                make(map[common.Hash][]*types.Log),
 		preimages:           make(map[common.Hash][]byte),
 		journal:             newJournal(),
+		shardID:             shardID,
 	}, nil
 }
 
@@ -229,6 +232,25 @@ func (self *StateDB) GetBalance(addr common.Address) *big.Int {
 		return stateObject.Balance()
 	}
 	return common.Big0
+}
+
+//
+// SHARDING FUNCTIONS
+//
+
+// Retrieve the shard from the given address or 0 if object is not found
+func (self *StateDB) GetMovedShard(addr common.Address) (bool, int) {
+	stateObject := self.getStateObject(addr)
+	if stateObject != nil {
+		return stateObject.GetMovedShard(self.shardID)
+	}
+	return false, self.shardID
+}
+
+// Set that shard to shardID
+func (self *StateDB) SetShard(addr common.Address, shardID int) error {
+	stateObject := self.getStateObject(addr)
+	return stateObject.SetMoved(shardID)
 }
 
 func (self *StateDB) GetNonce(addr common.Address) uint64 {

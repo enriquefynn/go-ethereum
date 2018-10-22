@@ -93,6 +93,8 @@ func NewEVMInterpreter(evm *EVM, cfg Config) *EVMInterpreter {
 	if !cfg.JumpTable[STOP].valid {
 		var jt JumpTable
 		switch {
+		case evm.ChainConfig().IsSharding(evm.BlockNumber):
+			jt = shardingInstructionSet
 		case evm.chainRules.IsIstanbul:
 			jt = istanbulInstructionSet
 		case evm.chainRules.IsConstantinople:
@@ -105,6 +107,7 @@ func NewEVMInterpreter(evm *EVM, cfg Config) *EVMInterpreter {
 			jt = tangerineWhistleInstructionSet
 		case evm.chainRules.IsHomestead:
 			jt = homesteadInstructionSet
+
 		default:
 			jt = frontierInstructionSet
 		}

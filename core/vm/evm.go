@@ -182,6 +182,125 @@ func (evm *EVM) Interpreter() Interpreter {
 	return evm.interpreter
 }
 
+// create creates a new contract using code as deployment code.
+func (evm *EVM) createMoved(caller ContractRef, codeAndHash *codeAndHash, gas uint64, value *big.Int, address common.Address, contractNonce uint64) ([]byte, common.Address, uint64, error) {
+	// Depth check execution. Fail if we're trying to execute above the
+	// limit.
+	if evm.depth > int(params.CallCreateDepth) {
+		return nil, common.Address{}, gas, ErrDepth
+	}
+
+	// if !evm.CanTransfer(evm.StateDB, caller.Address(), value) {
+	// 	return nil, common.Address{}, gas, ErrInsufficientBalance
+	// }
+
+	// TODO: See if we need to increment nonce
+	nonce := evm.StateDB.GetNonce(caller.Address())
+	evm.StateDB.SetNonce(caller.Address(), nonce+1)
+
+	// TODO: Possibly modify this!
+	// Ensure there's no existing contract already at the designated address
+	contractHash := evm.StateDB.GetCodeHash(address)
+	if evm.StateDB.GetNonce(address) != 0 || (contractHash != (common.Hash{}) && contractHash != emptyCodeHash) {
+		return nil, common.Address{}, 0, ErrContractAddressCollision
+	}
+
+	// Create a new account on the state
+	snapshot := evm.StateDB.Snapshot()
+	evm.StateDB.CreateAccount(address)
+	if evm.ChainConfig().IsEIP158(evm.BlockNumber) {
+		evm.StateDB.SetNonce(address, contractNonce)
+	}
+	// evm.Transfer(evm.StateDB, caller.Address(), address, value)
+	// evm.StateDB.AddBalance(address, value)
+	evm.StateDB.AddBalance(address, value)
+
+	// initialise a new contract and set the code that is to be used by the
+	// EVM. The contract is a scoped environment for this execution context
+	// only.
+	contract := NewContract(caller, AccountRef(address), value, gas)
+	contract.SetCodeOptionalHash(&address, codeAndHash)
+
+	if evm.vmConfig.NoRecursion && evm.depth > 0 {
+		return nil, address, gas, nil
+	}
+
+	if evm.vmConfig.Debug && evm.depth == 0 {
+		evm.vmConfig.Tracer.CaptureStart(caller.Address(), address, true, codeAndHash.code, gas, value)
+	}
+	start := time.Now()
+
+	// ret, err := run(evm, contract, nil, false)
+
+	// check whether the max code size has been exceeded
+	maxCodeSizeExceeded := evm.ChainConfig().IsEIP158(evm.BlockNumber) && len(codeAndHash.code) > params.MaxCodeSize
+	// if the contract creation ran successfully and no errors were returned
+	// calculate the gas required to store the code. If the code could not
+	// be stored due to not enough gas set an error and let it be handled
+	// by the error checking condition below.
+	if !maxCodeSizeExceeded {
+		evm.StateDB.SetCode(address, codeAndHash.code)
+	}
+
+	// When an error was returned by the EVM or when setting the creation code
+	// above we revert to the snapshot and consume any gas remaining. Additionally
+	// when we're in homestead this also counts for code storage gas errors.
+	if maxCodeSizeExceeded {
+		evm.StateDB.RevertToSnapshot(snapshot)
+	}
+	// Assign err if contract code size exceeds the max while the err is still empty.
+	var err error
+	if maxCodeSizeExceeded {
+		err = errMaxCodeSizeExceeded
+	}
+	if evm.vmConfig.Debug && evm.depth == 0 {
+		evm.vmConfig.Tracer.CaptureEnd(codeAndHash.code, gas-contract.Gas, time.Since(start), err)
+	}
+	return nil, address, contract.Gas, err
+
+}
+
+// Move2 Executes the 2nd step from the move operation
+// The input should prove the tx moved addr from Si to Sj,
+// Recreates the contract storage
+// executes move2 function in addr
+func (evm *EVM) Move2(caller ContractRef, addr common.Address, code, proof, storage, input []byte, gas uint64, value *big.Int, contractNonce uint64) (ret []byte, leftOverGas uint64, err error) {
+	// fmt.Printf("Code: %v, Proof: %v, Storage: %v, Input: %v\n", code, proof, storage, input)
+
+	// Recreate contract storage
+	to := AccountRef(addr)
+	contract := NewContract(caller, to, value, gas)
+	ret, _, leftOverGas, err = evm.createMoved(caller, &codeAndHash{code: code}, gas, value, addr, contractNonce)
+	if err != nil {
+		return ret, leftOverGas, err
+	}
+
+	// usedGas := 0
+	// The interpreter runs code in the contract code, here we want to run opcodes from the input
+	// Best way would be to implement some sort of lambdas for transactions
+	// TODO: Move code to interpreter, implement new opcode?!
+	// TODO: Gas deduction
+	for i := 0; i < len(storage); i += 64 {
+		loc := common.BytesToHash(storage[i : i+32])
+		val := common.BytesToHash(storage[i+32 : i+64])
+		// fmt.Printf("Recreating: %x %x\n", loc, val)
+		evm.StateDB.SetState(contract.Address(), loc, val)
+	}
+	// stateTrie := evm.StateDB.StorageTrie(contract.Address())
+
+	// TODO: Prove tx was appended in shard i
+	// At this point the contract state should be equal to the proof
+	// The proof should prove that the contract is the same as proven, and a transaction
+	// changed the sLoc to evm.ChainConfig().ShardID
+
+	// Change the sLoc to the shard id
+	evm.StateDB.SetShard(contract.Address(), evm.ChainConfig().ShardID)
+	run(evm, contract, input, false)
+
+	// Carry on gas
+	return nil, gas, nil
+}
+
 // Call executes the contract associated with the addr with the given input as
 // parameters. It also handles any necessary value transfer required and takes
 // the necessary steps to create accounts and reverses the state in case of an
@@ -189,6 +308,11 @@ func (evm *EVM) Interpreter() Interpreter {
 func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
 	if evm.vmConfig.NoRecursion && evm.depth > 0 {
 		return nil, gas, nil
+	}
+
+	isMoved, _ := evm.StateDB.GetMovedShard(addr)
+	if isMoved == true {
+		return nil, gas, errExecutionReverted
 	}
 
 	// Fail if we're trying to execute above the call depth limit
@@ -250,6 +374,7 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 			contract.UseGas(contract.Gas)
 		}
 	}
+
 	return ret, contract.Gas, err
 }
 

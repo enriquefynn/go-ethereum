@@ -61,7 +61,21 @@ var (
 	byzantiumInstructionSet        = newByzantiumInstructionSet()
 	constantinopleInstructionSet   = newConstantinopleInstructionSet()
 	istanbulInstructionSet         = newIstanbulInstructionSet()
+	shardingInstructionSet         = newShardingInstructionSet()
 )
+
+func newShardingInstructionSet() [256]operation {
+	instructionSet := newConstantinopleInstructionSet()
+	instructionSet[MOVE] = operation{
+		execute:     opMove,
+		constantGas: GasFastestStep,
+		minStack:    minStack(1, 0),
+		maxStack:    maxStack(1, 0),
+		valid:       true,
+		writes:      true,
+	}
+	return instructionSet
+}
 
 // JumpTable contains the EVM opcodes supported at a given fork.
 type JumpTable [256]operation

@@ -42,7 +42,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru"
 )
 
 var (
@@ -332,7 +332,7 @@ func (bc *BlockChain) loadLastState() error {
 		return bc.Reset()
 	}
 	// Make sure the state associated with the block is available
-	if _, err := state.New(currentBlock.Root(), bc.stateCache); err != nil {
+	if _, err := state.New(currentBlock.Root(), bc.stateCache, bc.chainConfig.ShardID); err != nil {
 		// Dangling block without a state associated, init from scratch
 		log.Warn("Head state missing, repairing chain", "number", currentBlock.Number(), "hash", currentBlock.Hash())
 		if err := bc.repair(&currentBlock); err != nil {
@@ -394,7 +394,7 @@ func (bc *BlockChain) SetHead(head uint64) error {
 			if newHeadBlock == nil {
 				newHeadBlock = bc.genesisBlock
 			} else {
-				if _, err := state.New(newHeadBlock.Root(), bc.stateCache); err != nil {
+				if _, err := state.New(newHeadBlock.Root(), bc.stateCache, bc.chainConfig.ShardID); err != nil {
 					// Rewound state missing, rolled back to before pivot, reset to genesis
 					newHeadBlock = bc.genesisBlock
 				}
@@ -507,7 +507,7 @@ func (bc *BlockChain) State() (*state.StateDB, error) {
 
 // StateAt returns a new mutable state based on a particular point in time.
 func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
-	return state.New(root, bc.stateCache)
+	return state.New(root, bc.stateCache, bc.chainConfig.ShardID)
 }
 
 // StateCache returns the caching database underpinning the blockchain instance.
@@ -558,7 +558,7 @@ func (bc *BlockChain) ResetWithGenesisBlock(genesis *types.Block) error {
 func (bc *BlockChain) repair(head **types.Block) error {
 	for {
 		// Abort if we've rewound to a head block that does have associated state
-		if _, err := state.New((*head).Root(), bc.stateCache); err == nil {
+		if _, err := state.New((*head).Root(), bc.stateCache, bc.chainConfig.ShardID); err == nil {
 			log.Info("Rewound blockchain to past state", "number", (*head).Number(), "hash", (*head).Hash())
 			return nil
 		}
@@ -1598,7 +1598,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, []
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
-		statedb, err := state.New(parent.Root, bc.stateCache)
+		statedb, err := state.New(parent.Root, bc.stateCache, bc.chainConfig.ShardID)
 		if err != nil {
 			return it.index, events, coalescedLogs, err
 		}
@@ -1609,7 +1609,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, []
 		if !bc.cacheConfig.TrieCleanNoPrefetch {
 			if followup, err := it.peek(); followup != nil && err == nil {
 				go func(start time.Time) {
-					throwaway, _ := state.New(parent.Root, bc.stateCache)
+					throwaway, _ := state.New(parent.Root, bc.stateCache, bc.chainConfig.ShardID)
 					bc.prefetcher.Prefetch(followup, throwaway, bc.vmConfig, &followupInterrupt)
 
 					blockPrefetchExecuteTimer.Update(time.Since(start))
