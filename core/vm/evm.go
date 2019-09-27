@@ -17,13 +17,19 @@
 package vm
 
 import (
+	"bytes"
+	"fmt"
 	"math/big"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // emptyCodeHash is used by create to ensure deployment is disallowed to already
@@ -264,40 +270,67 @@ func (evm *EVM) createMoved(caller ContractRef, codeAndHash *codeAndHash, gas ui
 // The input should prove the tx moved addr from Si to Sj,
 // Recreates the contract storage
 // executes move2 function in addr
-func (evm *EVM) Move2(caller ContractRef, addr common.Address, code, proof, storage, input []byte, gas uint64, value *big.Int, contractNonce uint64) (ret []byte, leftOverGas uint64, err error) {
-	// fmt.Printf("Code: %v, Proof: %v, Storage: %v, Input: %v\n", code, proof, storage, input)
+func (evm *EVM) Move2(caller ContractRef, addr common.Address, proof *common.AccountResult, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
+	fmt.Printf("MOVE2!!!\n\n")
 
-	// Recreate contract storage
-	to := AccountRef(addr)
-	contract := NewContract(caller, to, value, gas)
-	ret, _, leftOverGas, err = evm.createMoved(caller, &codeAndHash{code: code}, gas, value, addr, contractNonce)
+	// Verify proof:
+	keyAddr := crypto.Keccak256(addr.Bytes())
+	proofDB := memorydb.New()
+
+	for k := 0; k < len(proof.AccountProof); k += 2 {
+		proofDB.Put(proof.AccountProof[k], proof.AccountProof[k+1])
+	}
+	accountBytes, _, err := trie.VerifyProof(proof.RootHash, keyAddr, proofDB)
+	// Invalid proof
 	if err != nil {
-		return ret, leftOverGas, err
+		fmt.Printf("INVALID PROOF %v\n", err)
+		return nil, gas, err
 	}
 
-	// usedGas := 0
-	// The interpreter runs code in the contract code, here we want to run opcodes from the input
-	// Best way would be to implement some sort of lambdas for transactions
-	// TODO: Move code to interpreter, implement new opcode?!
-	// TODO: Gas deduction
-	for i := 0; i < len(storage); i += 64 {
-		loc := common.BytesToHash(storage[i : i+32])
-		val := common.BytesToHash(storage[i+32 : i+64])
-		// fmt.Printf("Recreating: %x %x\n", loc, val)
-		evm.StateDB.SetState(contract.Address(), loc, val)
+	var account state.Account
+	rlp.DecodeBytes(accountBytes, &account)
+	// Wrong shard
+	if int(account.Shardloc.Int64()) != evm.ChainConfig().ShardID {
+		fmt.Printf("WRONG SHARD %v %v\n", account.Shardloc.Int64(), evm.ChainConfig().ShardID)
+		// return nil, gas, fmt.Errorf("Wrong shard %v != %v", account.Shardloc.Int64(), evm.ChainConfig().ShardID)
 	}
-	// stateTrie := evm.StateDB.StorageTrie(contract.Address())
+	// check codehash
+	codeHash := crypto.Keccak256(proof.Code)
+	if !bytes.Equal(codeHash, account.CodeHash) {
+		fmt.Printf("INVALID code hash %v\n", err)
+		return nil, gas, err
+	}
 
-	// TODO: Prove tx was appended in shard i
-	// At this point the contract state should be equal to the proof
-	// The proof should prove that the contract is the same as proven, and a transaction
-	// changed the sLoc to evm.ChainConfig().ShardID
+	// Proof state variables
+	var keysValues [][]byte
+	for _, storageResult := range proof.StorageProof {
+		for i := 0; i < len(storageResult.Proof); i += 2 {
+			proofDB.Put(storageResult.Proof[i], storageResult.Proof[i+1])
+		}
+		value, _, err := trie.VerifyProof(account.Root, storageResult.Key, proofDB)
+		keysValues = append(keysValues, storageResult.Key, value)
+		if err != nil {
+			fmt.Printf("INVALID PROOF %v\n", err)
+			return nil, gas, err
+		}
+	}
+	// All good, can create contract:
+	evm.StateDB.CreateAccount(addr)
+	evm.StateDB.SetNonce(addr, account.Nonce)
 
-	// Change the sLoc to the shard id
+	totalValue := value.Add(value, account.Balance)
+	evm.Transfer(evm.StateDB, caller.Address(), addr, totalValue)
+
+	contract := NewContract(caller, AccountRef(addr), totalValue, gas)
+	contract.SetCodeOptionalHash(&addr, &codeAndHash{code: proof.Code, hash: common.BytesToHash(codeHash)})
 	evm.StateDB.SetShard(contract.Address(), evm.ChainConfig().ShardID)
-	run(evm, contract, input, false)
 
-	// Carry on gas
+	// Recreate storage:
+
+	for i := 0; i < len(keysValues); i += 2 {
+		evm.StateDB.SetRawState(addr, common.BytesToHash(keysValues[i]), common.BytesToHash(keysValues[i+1]))
+	}
+
 	return nil, gas, nil
 }
 

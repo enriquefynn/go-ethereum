@@ -44,6 +44,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/tyler-smith/go-bip39"
 )
 
@@ -538,52 +539,87 @@ func (s *PublicBlockChainAPI) GetBalance(ctx context.Context, address common.Add
 	return (*hexutil.Big)(state.GetBalance(address)), state.Error()
 }
 
-// Result structs for GetProof
-type AccountResult struct {
-	Address      common.Address  `json:"address"`
-	AccountProof []string        `json:"accountProof"`
-	Balance      *hexutil.Big    `json:"balance"`
-	CodeHash     common.Hash     `json:"codeHash"`
-	Nonce        hexutil.Uint64  `json:"nonce"`
-	StorageHash  common.Hash     `json:"storageHash"`
-	StorageProof []StorageResult `json:"storageProof"`
-}
-type StorageResult struct {
-	Key   string       `json:"key"`
-	Value *hexutil.Big `json:"value"`
-	Proof []string     `json:"proof"`
+func (s *PublicBlockChainAPI) GetAllAccountProof(ctx context.Context, address common.Address, blockNr rpc.BlockNumber) (*common.AccountResult, error) {
+	state, header, err := s.b.StateAndHeaderByNumber(ctx, blockNr)
+	if state == nil || err != nil {
+		return nil, err
+	}
+
+	storageTrie := state.StorageTrie(address)
+	if storageTrie == nil {
+		return nil, fmt.Errorf("Error getting the state trie")
+	}
+	// storageHash := types.EmptyRootHash
+	code := state.GetCode(address)
+	var storageProof []common.StorageResult
+
+	storageIt := trie.NewIterator(storageTrie.NodeIterator(nil))
+
+	// if we have a storageTrie, (which means the account exists), we can update the storagehash
+	// if storageTrie != nil {
+	// storageHash = storageTrie.Hash()
+	// }
+
+	// create the proof for the storageKeys
+	for storageIt.Next() {
+		key := storageIt.Key
+		if storageTrie != nil {
+			proof, storageError := state.GetStorageProof(address, common.BytesToHash(key))
+			if storageError != nil {
+				return nil, storageError
+			}
+			//(*hexutil.Big)(state.GetState(address, common.BytesToHash(key)).Big())
+			storageProof = append(storageProof, common.StorageResult{key, proof})
+		} else {
+			storageProof = append(storageProof, common.StorageResult{key, [][]byte{}})
+		}
+	}
+
+	// create the accountProof
+	accountProof, proofErr := state.GetProof(address)
+	if proofErr != nil {
+		return nil, proofErr
+	}
+	// _, shardID := state.GetMovedShard(address)
+	return &common.AccountResult{
+		// Address:      address,
+		AccountProof: accountProof,
+		// Balance:      (*hexutil.Big)(state.GetBalance(address)),
+		Code: code,
+		// Nonce:        hexutil.Uint64(state.GetNonce(address)),
+		// ShardID:      hexutil.Uint64(shardID),
+		// StorageHash:  storageHash,
+		StorageProof: storageProof,
+		RootHash:     header.Root,
+	}, state.Error()
 }
 
 // GetProof returns the Merkle-proof for a given account and optionally some storage keys.
-func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNr rpc.BlockNumber) (*AccountResult, error) {
+func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Address, storageKeys [][]byte, blockNr rpc.BlockNumber) (*common.AccountResult, error) {
 	state, _, err := s.b.StateAndHeaderByNumber(ctx, blockNr)
 	if state == nil || err != nil {
 		return nil, err
 	}
 
 	storageTrie := state.StorageTrie(address)
-	storageHash := types.EmptyRootHash
-	codeHash := state.GetCodeHash(address)
-	storageProof := make([]StorageResult, len(storageKeys))
+	// storageHash := types.EmptyRootHash
+	// code := state.GetCode(address)
+	storageProof := make([]common.StorageResult, len(storageKeys))
 
 	// if we have a storageTrie, (which means the account exists), we can update the storagehash
-	if storageTrie != nil {
-		storageHash = storageTrie.Hash()
-	} else {
-		// no storageTrie means the account does not exist, so the codeHash is the hash of an empty bytearray.
-		codeHash = crypto.Keccak256Hash(nil)
-	}
-
+	// if storageTrie != nil {
+	// 	storageHash = storageTrie.Hash()
+	// }
 	// create the proof for the storageKeys
 	for i, key := range storageKeys {
 		if storageTrie != nil {
-			proof, storageError := state.GetStorageProof(address, common.HexToHash(key))
+			proof, storageError := state.GetStorageProof(address, common.BytesToHash(key))
 			if storageError != nil {
 				return nil, storageError
 			}
-			storageProof[i] = StorageResult{key, (*hexutil.Big)(state.GetState(address, common.HexToHash(key)).Big()), common.ToHexArray(proof)}
+			storageProof[i] = common.StorageResult{key, proof}
 		} else {
-			storageProof[i] = StorageResult{key, &hexutil.Big{}, []string{}}
+			storageProof[i] = common.StorageResult{key, [][]byte{}}
 		}
 	}
 
@@ -593,13 +629,13 @@ func (s *PublicBlockChainAPI) GetProof(ctx context.Context, address common.Addre
 		return nil, proofErr
 	}
 
-	return &AccountResult{
-		Address:      address,
-		AccountProof: common.ToHexArray(accountProof),
-		Balance:      (*hexutil.Big)(state.GetBalance(address)),
-		CodeHash:     codeHash,
-		Nonce:        hexutil.Uint64(state.GetNonce(address)),
-		StorageHash:  storageHash,
+	return &common.AccountResult{
+		// Address:      address,
+		AccountProof: accountProof,
+		// Balance:      (*hexutil.Big)(state.GetBalance(address)),
+		// Code:         code,
+		// Nonce:        hexutil.Uint64(state.GetNonce(address)),
+		// StorageHash:  storageHash,
 		StorageProof: storageProof,
 	}, state.Error()
 }

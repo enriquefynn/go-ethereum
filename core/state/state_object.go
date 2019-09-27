@@ -18,7 +18,6 @@ package state
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -84,6 +83,7 @@ type stateObject struct {
 	pendingStorage Storage // Storage entries that need to be flushed to disk, at the end of an entire block
 	dirtyStorage   Storage // Storage entries that have been modified in the current transaction execution
 	fakeStorage    Storage // Fake storage which constructed by caller for debugging purpose.
+	movedStorage   Storage // Storage of moved contracts
 
 	// Cache flags.
 	// When an object is marked suicided it will be delete from the trie
@@ -130,6 +130,7 @@ func newObject(db *StateDB, address common.Address, data Account) *stateObject {
 		originStorage:  make(Storage),
 		pendingStorage: make(Storage),
 		dirtyStorage:   make(Storage),
+		movedStorage:   make(Storage),
 	}
 }
 
@@ -243,6 +244,13 @@ func (s *stateObject) SetState(db Database, key, value common.Hash) {
 	s.setState(key, value)
 }
 
+func (s *stateObject) SetRawState(db Database, key, value common.Hash) {
+	if s.movedStorage == nil {
+		s.movedStorage = make(Storage)
+	}
+	s.movedStorage[key] = value
+}
+
 // SetStorage replaces the entire state storage with the given one.
 //
 // After this function is called, all original state will be ignored and state
@@ -301,6 +309,10 @@ func (s *stateObject) updateTrie(db Database) Trie {
 		// Encoding []byte cannot fail, ok to ignore the error.
 		v, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(value[:]))
 		s.setError(tr.TryUpdate(key[:], v))
+	}
+	// do moved state
+	for key, value := range s.movedStorage {
+		s.setError(tr.TryRawUpdate(key[:], value.Bytes()))
 	}
 	if len(s.pendingStorage) > 0 {
 		s.pendingStorage = make(Storage)
@@ -385,6 +397,7 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	stateObject.dirtyStorage = s.dirtyStorage.Copy()
 	stateObject.originStorage = s.originStorage.Copy()
 	stateObject.pendingStorage = s.pendingStorage.Copy()
+	stateObject.movedStorage = s.movedStorage.Copy()
 	stateObject.suicided = s.suicided
 	stateObject.dirtyCode = s.dirtyCode
 	stateObject.deleted = s.deleted
@@ -393,24 +406,10 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 
 // Returns if account is moved to shards if so returns the shards ids
 func (self *stateObject) GetMovedShard(myShard int) (bool, int) {
-	if self.data.Shardloc.Bit(0) == 0 {
-		var movedLocation int
-		for idx, word := range self.data.Shardloc.Bits() {
-			movedLocation = idx * 64
-			for i := 0; i <= 64; i++ {
-				if word>>uint(i)&1 == 1 {
-					movedLocation += i
-					if movedLocation == myShard {
-						return false, myShard
-					}
-					return true, movedLocation
-				}
-			}
-		}
-		// Shardloc is 0
-		return false, 0
+	if self.data.Shardloc.Cmp(big.NewInt(int64(myShard))) == 0 {
+		return false, myShard
 	}
-	return true, 0
+	return true, int(self.data.Shardloc.Int64())
 }
 
 // Set a contract as moved to shard shardID
@@ -419,13 +418,7 @@ func (self *stateObject) SetMoved(shardID int) error {
 		account: &self.address,
 		prev:    self.data.Shardloc,
 	})
-	if self.data.Shardloc.Bit(0) == 1 {
-		return errors.New("Cannot move copied account")
-	}
-	if shardID > 255 {
-		return errors.New("Shard should range between 1 and 255")
-	}
-	self.data.Shardloc.SetBit(self.data.Shardloc, shardID, 1)
+	self.data.Shardloc.SetInt64(int64(shardID))
 	return nil
 }
 

@@ -69,6 +69,7 @@ type Trie interface {
 	// by the caller while they are stored in the trie. If a node was not found in the
 	// database, a trie.MissingNodeError is returned.
 	TryUpdate(key, value []byte) error
+	TryRawUpdate(key, value []byte) error
 
 	// TryDelete removes any existing value for key from the trie. If a node was not
 	// found in the database, a trie.MissingNodeError is returned.

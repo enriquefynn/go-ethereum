@@ -49,6 +49,7 @@ var (
 type proofList [][]byte
 
 func (n *proofList) Put(key []byte, value []byte) error {
+	*n = append(*n, key)
 	*n = append(*n, value)
 	return nil
 }
@@ -326,7 +327,7 @@ func (self *StateDB) GetStorageProof(a common.Address, key common.Hash) ([][]byt
 	if trie == nil {
 		return proof, errors.New("storage trie for requested address does not exist")
 	}
-	err := trie.Prove(crypto.Keccak256(key.Bytes()), 0, &proof)
+	err := trie.Prove(key.Bytes(), 0, &proof)
 	return [][]byte(proof), err
 }
 
@@ -408,6 +409,13 @@ func (self *StateDB) SetState(addr common.Address, key, value common.Hash) {
 	stateObject := self.GetOrNewStateObject(addr)
 	if stateObject != nil {
 		stateObject.SetState(self.db, key, value)
+	}
+}
+
+func (self *StateDB) SetRawState(addr common.Address, key, value common.Hash) {
+	stateObject := self.GetOrNewStateObject(addr)
+	if stateObject != nil {
+		stateObject.SetRawState(self.db, key, value)
 	}
 }
 

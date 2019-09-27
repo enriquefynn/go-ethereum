@@ -517,6 +517,12 @@ func (ec *Client) SendTransaction(ctx context.Context, tx *types.Transaction) er
 	return ec.c.CallContext(ctx, nil, "eth_sendRawTransaction", common.ToHex(data))
 }
 
+func (ec *Client) GetMovedProof(ctx context.Context, address common.Address, blockNumber *big.Int) (common.AccountResult, error) {
+	var accountResult common.AccountResult
+	err := ec.c.CallContext(ctx, &accountResult, "eth_getAllAccountProof", address, toBlockNumArg(blockNumber))
+	return accountResult, err
+}
+
 func toCallArg(msg ethereum.CallMsg) interface{} {
 	arg := map[string]interface{}{
 		"from": msg.From,

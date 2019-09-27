@@ -367,3 +367,21 @@ func (ma *MixedcaseAddress) ValidChecksum() bool {
 func (ma *MixedcaseAddress) Original() string {
 	return ma.original
 }
+
+// Result structs for GetProof
+type AccountResult struct {
+	// Address      Address         `json:"address"`
+	AccountProof [][]byte `json:"accountProof"`
+	// Balance      *hexutil.Big    `json:"balance"`
+	Code []byte `json:"code"`
+	// Nonce        hexutil.Uint64  `json:"nonce"`
+	// ShardID      hexutil.Uint64  `json:"shardID"`
+	// StorageHash  Hash            `json:"storageHash"`
+	StorageProof []StorageResult `json:"storageProof"`
+	RootHash     Hash            `json:"rootHash"`
+}
+type StorageResult struct {
+	Key []byte `json:"key"`
+	// Value []byte   `json:"value"`
+	Proof [][]byte `json:"proof"`
+}
