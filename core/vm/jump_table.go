@@ -65,7 +65,7 @@ var (
 )
 
 func newShardingInstructionSet() [256]operation {
-	instructionSet := newConstantinopleInstructionSet()
+	instructionSet := newIstanbulInstructionSet()
 	instructionSet[MOVE] = operation{
 		execute:     opMove,
 		constantGas: GasFastestStep,

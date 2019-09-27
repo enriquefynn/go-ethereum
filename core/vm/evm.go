@@ -303,15 +303,17 @@ func (evm *EVM) Move2(caller ContractRef, addr common.Address, proof *common.Acc
 
 	// Proof state variables
 	var keysValues [][]byte
+	var consumedGas uint64
 	for _, storageResult := range proof.StorageProof {
 		for i := 0; i < len(storageResult.Proof); i += 2 {
 			proofDB.Put(storageResult.Proof[i], storageResult.Proof[i+1])
 		}
 		value, _, err := trie.VerifyProof(account.Root, storageResult.Key, proofDB)
 		keysValues = append(keysValues, storageResult.Key, value)
+		consumedGas += params.NetSstoreInitGas
 		if err != nil {
 			fmt.Printf("INVALID PROOF %v\n", err)
-			return nil, gas, err
+			return nil, gas - consumedGas, err
 		}
 	}
 	// All good, can create contract:
@@ -326,12 +328,11 @@ func (evm *EVM) Move2(caller ContractRef, addr common.Address, proof *common.Acc
 	evm.StateDB.SetShard(contract.Address(), evm.ChainConfig().ShardID)
 
 	// Recreate storage:
-
 	for i := 0; i < len(keysValues); i += 2 {
 		evm.StateDB.SetRawState(addr, common.BytesToHash(keysValues[i]), common.BytesToHash(keysValues[i+1]))
 	}
 
-	return nil, gas, nil
+	return nil, gas - consumedGas, nil
 }
 
 // Call executes the contract associated with the addr with the given input as
