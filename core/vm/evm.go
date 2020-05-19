@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -30,6 +31,9 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+
+	"github.com/hyperledger/burrow/acm"
+	burrowProofs "github.com/hyperledger/burrow/proofs"
 )
 
 // emptyCodeHash is used by create to ensure deployment is disallowed to already
@@ -333,6 +337,85 @@ func (evm *EVM) Move2(caller ContractRef, addr common.Address, proof *common.Acc
 	}
 
 	return nil, gas - consumedGas, nil
+}
+
+func (evm *EVM) Move2Burrow(caller ContractRef, addr common.Address, accountProof,
+	storageProof *burrowProofs.Proof, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
+	fmt.Printf("MOVE2!!!\n\n")
+
+	// // Assume blockRoot is valid at this point
+	// // Verify proof according to blockRoot
+	if accountProof == nil || storageProof == nil {
+		return nil, gas, fmt.Errorf("Null proof")
+	}
+
+	account, _ := acm.Decode(accountProof.DataValues[0])
+	isValidProof := accountProof.Verify()
+	if isValidProof != nil {
+		log.Warnf("Invalid account proof: %v from %v acc: %v", isValidProof, caller, account.Address)
+		return nil, gas, fmt.Errorf("Invalid account proof")
+	}
+
+	isValidProof = storageProof.Verify()
+	if isValidProof != nil {
+		log.Warnf("Invalid storage proof: %v", isValidProof)
+		return nil, gas, fmt.Errorf("Invalid storage proof")
+	}
+
+	if int(account.ShardID) != evm.ChainConfig().ShardID {
+		log.Warnf("Invalid shard: %v %v", account.ShardID, evm.ChainConfig().ShardID)
+		// return nil, gas, fmt.Errorf("Invalid shard")
+	}
+
+	snapshot := evm.StateDB.Snapshot()
+	evm.StateDB.CreateAccount(addr)
+	evm.StateDB.SetNonce(addr, account.GetSequence())
+	totalValue := value.Add(value, big.NewInt(int64(account.Balance)))
+	evm.Transfer(evm.StateDB, caller.Address(), addr, totalValue)
+
+	contract := NewContract(caller, AccountRef(addr), totalValue, gas)
+	codeHash := crypto.Keccak256(account.Code[:])
+	contract.SetCodeOptionalHash(&addr, &codeAndHash{code: account.Code[:], hash: common.BytesToHash(codeHash)})
+	evm.StateDB.SetShard(contract.Address(), evm.ChainConfig().ShardID)
+
+	var consumedGas uint64
+
+	maxCodeSizeExceeded := evm.chainRules.IsEIP158 && len(contract.Code) > params.MaxCodeSize
+	// if the contract creation ran successfully and no errors were returned
+	// calculate the gas required to store the code. If the code could not
+	// be stored due to not enough gas set an error and let it be handled
+	// by the error checking condition below.
+	if err == nil && !maxCodeSizeExceeded {
+		createDataGas := uint64(len(contract.Code)) * params.CreateDataGas
+		consumedGas += createDataGas
+		if contract.UseGas(createDataGas) {
+			evm.StateDB.SetCode(addr, contract.Code)
+		} else {
+			err = ErrCodeStoreOutOfGas
+		}
+	}
+
+	// When an error was returned by the EVM or when setting the creation code
+	// above we revert to the snapshot and consume any gas remaining. Additionally
+	// when we're in homestead this also counts for code storage gas errors.
+	if maxCodeSizeExceeded || (err != nil && (evm.chainRules.IsHomestead || err != ErrCodeStoreOutOfGas)) {
+		evm.StateDB.RevertToSnapshot(snapshot)
+		if err != errExecutionReverted {
+			contract.UseGas(contract.Gas)
+		}
+	}
+	// Assign err if contract code size exceeds the max while the err is still empty.
+	if maxCodeSizeExceeded && err == nil {
+		err = errMaxCodeSizeExceeded
+	}
+
+	for i := 0; i < len(storageProof.DataKeys); i++ {
+		evm.StateDB.SetRawState(addr, common.BytesToHash(storageProof.DataKeys[i]),
+			common.BytesToHash(storageProof.DataValues[i]))
+		consumedGas += params.NetSstoreInitGas
+	}
+
+	return nil, gas - consumedGas, err
 }
 
 // Call executes the contract associated with the addr with the given input as

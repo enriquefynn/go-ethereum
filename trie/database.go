@@ -336,6 +336,12 @@ func (db *Database) InsertBlob(hash common.Hash, blob []byte) {
 	db.insert(hash, blob, rawNode(blob))
 }
 
+func (db *Database) GetRaw(hash common.Hash) ([]byte, error) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	return db.DiskDB().Get(hash.Bytes())
+}
+
 // insert inserts a collapsed trie node into the memory database. This method is
 // a more generic version of InsertBlob, supporting both raw blob insertions as
 // well ex trie node insertions. The blob must always be specified to allow proper

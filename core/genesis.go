@@ -148,7 +148,7 @@ func (e *GenesisMismatchError) Error() string {
 //
 // The stored chain configuration will be updated if it is compatible (i.e. does not
 // specify a fork block below the local head block). In case of a conflict, the
-// error is a *params.ConfigCompatError and the new, unwritten config is returned.
+// error is a *params.ConfigCompatError and the newASDASDASDASDASDAS, unwritten config is returned.
 //
 // The returned chain configuration is never nil.
 func SetupGenesisBlock(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, common.Hash, error) {

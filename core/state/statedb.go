@@ -18,10 +18,12 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +33,9 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/hyperledger/burrow/deploy/def"
+	"github.com/hyperledger/burrow/logging"
+	"github.com/hyperledger/burrow/rpc/rpcevents"
 )
 
 type revision struct {
@@ -108,13 +113,68 @@ type StateDB struct {
 	StorageCommits time.Duration
 }
 
+var isSpawned = false
+var BurrowHashes map[[32]byte]bool
+var BurrowHashesMutex sync.RWMutex
+
+func (self *StateDB) SpawnBurrowClient() {
+	if isSpawned {
+		return
+	}
+	if isSpawned == false {
+		BurrowHashes = make(map[[32]byte]bool)
+		isSpawned = true
+	}
+
+	log.Info("SPAWN BURROW CLIENT")
+	client := def.NewClient("localhost:20002", "", false, 10*time.Second)
+	logger := logging.NewNoopLogger()
+	clientEvents, err := client.Events(logger)
+	if err != nil {
+		log.Warn("ERROR spawning burrow client")
+		fmt.Printf("ERROR: %v\n", err)
+		return
+		// panic(fmt.Sprintf("Error burrow client %v", err))
+	}
+	request := &rpcevents.BlocksRequest{
+		BlockRange: rpcevents.NewBlockRange(rpcevents.AbsoluteBound(1), rpcevents.StreamBound()),
+	}
+	signedHeaders, err := clientEvents.StreamSignedHeaders(context.Background(), request)
+	if err != nil {
+		log.Warn("ERROR getting signed headers")
+		// panic(fmt.Sprintf("Error burrow client %v", err))
+	}
+
+	go func() {
+		for {
+			resp, err := signedHeaders.Recv()
+			if err != nil {
+				panic(fmt.Sprintf("Error burrow client %v", err))
+			}
+			h := resp.SignedHeader.Header.AppHash
+			var hash [32]byte
+			copy(hash[:], h)
+			// fmt.Printf("Received burrow hash: %x\n", hash)
+			BurrowHashesMutex.Lock()
+			BurrowHashes[hash] = true
+			BurrowHashesMutex.Unlock()
+		}
+	}()
+}
+
+func (self *StateDB) CheckBurrowHash(hash [32]byte) bool {
+	BurrowHashesMutex.RLock()
+	defer BurrowHashesMutex.RUnlock()
+	return BurrowHashes[hash]
+}
+
 // Create a new state from a given trie.
 func New(root common.Hash, db Database, shardID int) (*StateDB, error) {
 	tr, err := db.OpenTrie(root)
 	if err != nil {
 		return nil, err
 	}
-	return &StateDB{
+	state := &StateDB{
 		db:                  db,
 		trie:                tr,
 		stateObjects:        make(map[common.Address]*stateObject),
@@ -124,7 +184,9 @@ func New(root common.Hash, db Database, shardID int) (*StateDB, error) {
 		preimages:           make(map[common.Hash][]byte),
 		journal:             newJournal(),
 		shardID:             shardID,
-	}, nil
+	}
+	state.SpawnBurrowClient()
+	return state, nil
 }
 
 // setError remembers the first non-nil error it is called with.

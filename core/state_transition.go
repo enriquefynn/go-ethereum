@@ -17,16 +17,19 @@
 package core
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
-	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/hyperledger/burrow/proofs"
 )
 
 var (
@@ -186,6 +189,9 @@ func (st *StateTransition) preCheck() error {
 // TransitionDb will transition the state by applying the current message and
 // returning the result including the used gas. It returns an error if failed.
 // An error indicates a consensus issue.
+var moveOp = [4]byte{0, 0, 0, 1}
+var burrowMoveOp = [4]byte{0, 0, 0, 2}
+
 func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bool, err error) {
 	if err = st.preCheck(); err != nil {
 		return
@@ -196,11 +202,13 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 	istanbul := st.evm.ChainConfig().IsIstanbul(st.evm.BlockNumber)
 	contractCreation := msg.To() == nil
 
-	moveOp := []byte{0, 0, 0, 1}
 	// TODO: Pay move2 gas
 	var isMove2 bool
+	var isBurrowMove bool
 	if len(st.data) >= 4 {
-		isMove2 = reflect.DeepEqual(st.data[0:4], moveOp)
+		isMove2 = bytes.Compare(st.data[0:4], moveOp[:]) == 0
+		isBurrowMove = bytes.Compare(st.data[0:4], burrowMoveOp[:]) == 0
+		fmt.Printf("IS MOVE2 burrow: %v\n", isBurrowMove)
 	}
 
 	// Pay intrinsic gas
@@ -228,8 +236,37 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = evm.Move2(sender, st.to(), &proofAccount, st.gas, st.value)
-	} else {
+	} else if isBurrowMove {
+		accountSize := binary.LittleEndian.Uint32(st.data[4:8])
+		accountProofBytes := st.data[8 : 8+accountSize]
+		var accountProof proofs.Proof
+		var storageProof proofs.Proof
+
+		// Account
+		err := accountProof.Unmarshal(accountProofBytes)
+		if err != nil {
+			log.Warn(fmt.Sprintf("ERROR IN PROOF: %v", err))
+		}
+		r := accountProof.CommitProof.ComputeRootHash()
+		var rootHash [32]byte
+		copy(rootHash[:], r)
+		fmt.Printf("ROOT HASH: %x\n", r)
+		if st.state.CheckBurrowHash(rootHash) == false {
+			log.Warn("ERROR checking burrow proof")
+		}
+
+		// Storage
+		storageProofBytes := st.data[8+accountSize:]
+		err = storageProof.Unmarshal(storageProofBytes)
+		if err != nil {
+			log.Warn(fmt.Sprintf("ERROR IN PROOF: %v", err))
+		}
+
 		// Increment the nonce for the next transaction
+		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
+		ret, st.gas, vmerr = evm.Move2Burrow(sender, st.to(), &accountProof, &storageProof, st.gas, st.value)
+
+	} else {
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = evm.Call(sender, st.to(), st.data, st.gas, st.value)
 	}

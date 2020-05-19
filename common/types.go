@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/tendermint/go-amino"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -384,4 +385,26 @@ type StorageResult struct {
 	Key []byte `json:"key"`
 	// Value []byte   `json:"value"`
 	Proof [][]byte `json:"proof"`
+}
+
+var cdc = amino.NewCodec()
+
+func (sh *AccountResult) Unmarshal(header []byte) error {
+	return cdc.UnmarshalBinaryBare(header, sh)
+}
+
+func (sh *AccountResult) MarshalTo(tree []byte) (int, error) {
+	header, err := cdc.MarshalBinaryBare(sh)
+	if err != nil {
+		return 0, err
+	}
+	return copy(tree, header), nil
+}
+
+func (sh *AccountResult) Size() int {
+	bz, err := cdc.MarshalBinaryBare(sh)
+	if err != nil {
+		return 0
+	}
+	return len(bz)
 }

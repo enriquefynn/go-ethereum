@@ -137,6 +137,53 @@ func New(ctx *node.ServiceContext, config *Config) (*Ethereum, error) {
 	}
 	//TODO: Fix this
 	chainConfig, genesisHash, genesisErr := core.SetupGenesisBlockWithOverride(chainDb, config.Genesis, config.OverrideIstanbul, 0)
+
+	///////////////////////
+
+	// 	func (self *StateDB) SpawnBurrowClient() {
+	// 	log.Info("SPAWN BURROW CLIENT")
+	// 	client := def.NewClient("localhost:20002", "", false, 10*time.Second)
+	// 	logger := logging.NewNoopLogger()
+	// 	clientEvents, err := client.Events(logger)
+	// 	if err != nil {
+	// 		log.Warn("ERROR spawning burrow client")
+	// 		return
+	// 		// panic(fmt.Sprintf("Error burrow client %v", err))
+	// 	}
+	// 	request := &rpcevents.BlocksRequest{
+	// 		BlockRange: rpcevents.NewBlockRange(rpcevents.AbsoluteBound(1), rpcevents.StreamBound()),
+	// 	}
+	// 	signedHeaders, err := clientEvents.StreamSignedHeaders(context.Background(), request)
+	// 	if err != nil {
+	// 		log.Warn("ERROR spawning burrow client")
+	// 		// panic(fmt.Sprintf("Error burrow client %v", err))
+	// 	}
+
+	// 	go func() {
+	// 		for {
+	// 			resp, err := signedHeaders.Recv()
+	// 			if err != nil {
+	// 				panic(fmt.Sprintf("Error burrow client %v", err))
+	// 			}
+	// 			h := resp.SignedHeader.Hash()
+	// 			var hash [32]byte
+	// 			copy(hash[:], h)
+	// 			fmt.Printf("Received burrow hash: %x\n", hash)
+	// 			self.BurrowHashesMutex.Lock()
+	// 			self.BurrowHashes[hash] = true
+	// 			self.BurrowHashesMutex.Unlock()
+	// 		}
+	// 	}()
+	// }
+
+	// func (self *StateDB) CheckBurrowHash(hash [32]byte) bool {
+	// 	self.BurrowHashesMutex.RLock()
+	// 	defer self.BurrowHashesMutex.RUnlock()
+	// 	return self.BurrowHashes[hash]
+	// }
+
+	//////////////////////
+
 	if _, ok := genesisErr.(*params.ConfigCompatError); genesisErr != nil && !ok {
 		return nil, genesisErr
 	}
